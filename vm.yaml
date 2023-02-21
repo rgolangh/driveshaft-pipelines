@@ -1,0 +1,77 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  creationTimestamp: "2023-02-07T13:37:21Z"
+  generation: 38
+  name: vm
+  namespace: aiml
+  resourceVersion: "31871677"
+  uid: b6d04805-63a0-4a10-80dd-85f89d9f2e89
+spec:
+  params:
+  - default: osbuild
+    name: vmName
+    type: string
+  tasks:
+  - name: execute-in-vm-arm
+    params:
+    - name: vmName
+      value: $(params.vmName)
+    - name: secretName
+      value: sshkey
+    - name: command
+      value: []
+    - name: args
+      value: []
+    - name: script
+      value: |-
+        sudo dnf install -y osbuild  osbuild-tools git make;
+        cd $(mktemp -d -p /var/tmp/);
+        git clone https://gitlab.com/CentOS/automotive/sample-images/;
+        cd sample-images/osbuild-manifests;
+        make cs9-qemu-minimal-ostree.aarch64.qcow2
+    runAfter:
+    - create-vm-if-not-exists
+    taskRef:
+      kind: ClusterTask
+      name: execute-in-vm-arm
+  - name: create-vm-if-not-exists
+    params:
+    - name: templateName
+      value: f37-arm
+    - name: templateNamespace
+      value: openshift-cnv
+    - name: templateParams
+      value:
+      - NAME:$(params.vmName)
+      - CPU:4
+      - MEM:8
+    - name: startVM
+      value: "true"
+    - name: dataVolumes
+      value: []
+    - name: ownDataVolumes
+      value: []
+    - name: persistentVolumeClaims
+      value: []
+    - name: ownPersistentVolumeClaims
+      value: []
+    runAfter:
+    - is-vm-exists
+    taskRef:
+      kind: ClusterTask
+      name: create-vm-from-template-arm
+    when:
+    - input: $(tasks.is-vm-exists.results.out)
+      operator: notin
+      values:
+      - "true"
+  - name: is-vm-exists
+    params:
+    - name: SCRIPT
+      value: oc get --ignore-not-found -o jsonpath=true vm $(params.vmName)
+    - name: VERSION
+      value: latest
+    taskRef:
+      kind: ClusterTask
+      name: openshift-client

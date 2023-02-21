@@ -1,0 +1,189 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  creationTimestamp: "2023-02-01T11:33:02Z"
+  generation: 28
+  name: image-process
+  namespace: aiml
+  resourceVersion: "27018858"
+  uid: a6579e22-3ca5-46f7-be01-a40274db5000
+spec:
+  finally:
+  - name: curl-notify-image-ready-with-url
+    params:
+    - name: url
+      value: example.org/foo
+    - name: options
+      value: []
+    - name: curl-image
+      value: docker.io/curlimages/curl:7.72.0@sha256:bd5bbd35f89b867c1dccbc84b8be52f3f74dea20b46c5fe0db3780e040afcb6f
+    taskRef:
+      kind: Task
+      name: curl
+  params:
+  - default: PP2R9MU7NF55NA1XATVQ
+    description: source bucket access key
+    name: AWS_ACCESS_KEY_ID
+    type: string
+  - default: Q0psWFeamGoduXOLMJKcEjpBS2pFcaAF4O3VERF2
+    description: source bucket secret key
+    name: AWS_SECRET_ACCESS_KEY
+    type: string
+  - default: README.md
+    description: the image file to process
+    name: filename
+    type: string
+  - default: s3://ceph-bkt-295afeb1-f83b-492f-a390-d06ee92c3dfa
+    description: 'the bucket to pull files from '
+    name: bucket
+    type: string
+  - default: http://rook-ceph-rgw-my-store-rook-ceph.apps.driveshaft.projects.ecosystem.sysdeseng.com
+    description: object store endpoint url - needed when the object store is not aws
+    name: AWS_ENDPOINT_URL
+    type: string
+  tasks:
+  - name: file-from-bucket
+    params:
+    - name: SCRIPT
+      value: AWS_ACCESS_KEY_ID=$(params.AWS_ACCESS_KEY_ID) AWS_SECRET_ACCESS_KEY=$(params.AWS_SECRET_ACCESS_KEY)
+        aws $@
+    - name: ARGS
+      value:
+      - s3
+      - cp
+      - $(params.bucket)/$(params.filename)
+      - $(workspaces.source.path)/$(params.filename)
+      - --endpoint-url $(params.AWS_ENDPOINT_URL)
+    taskRef:
+      kind: Task
+      name: aws-cli
+    workspaces:
+    - name: source
+      workspace: workspace-2
+  - name: check-file
+    params:
+    - name: script
+      value: ls -la  "$(workspaces.workspace.path)"/README.md
+    runAfter:
+    - file-from-bucket
+    taskRef:
+      kind: Task
+      name: bash-task
+    workspaces:
+    - name: workspace
+      workspace: workspace-2
+  - name: train-model-with-uploaded-image
+    params:
+    - name: script
+      value: |-
+        echo take the image from the workspace
+        echo train model
+        echo copy artifact to workspace
+        echo done
+    runAfter:
+    - image-build
+    taskRef:
+      kind: Task
+      name: bash-task
+    workspaces:
+    - name: workspace
+      workspace: workspace-2
+  - name: wait-for-vmi-status
+    params:
+    - name: vmiName
+      value: $(tasks.create-vm.results.name)
+    - name: successCondition
+      value: status.phase == Running
+    runAfter:
+    - execute-in-vm-arm
+    taskRef:
+      kind: ClusterTask
+      name: wait-for-vmi-status
+  - name: image-build
+    params:
+    - name: vmName
+      value: $(tasks.create-vm.results.name)
+    - name: secretName
+      value: sshkey
+    - name: command
+      value: []
+    - name: args
+      value: []
+    - name: script
+      value: echo "hey from image builder task" >> $(worksp$(workspaces.workspace-2.path)/disk.qcow
+    runAfter:
+    - git-clone
+    taskRef:
+      kind: ClusterTask
+      name: execute-in-vm
+  - name: git-clone
+    params:
+    - name: url
+      value: https://gitlab.com/CentOS/automotive/sample-images/-/tree/main/osbuild-manifests
+    - name: revision
+      value: main
+    - name: submodules
+      value: "true"
+    - name: depth
+      value: "1"
+    - name: sslVerify
+      value: "true"
+    - name: crtFileName
+      value: ca-bundle.crt
+    - name: deleteExisting
+      value: "true"
+    - name: verbose
+      value: "true"
+    - name: gitInitImage
+      value: registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:2b4c4958cabdceffefef68940608f2c7e6774c0b94ba3eb49fa1b9ff0b544e8c
+    - name: userHome
+      value: /tekton/home
+    runAfter:
+    - wait-for-vmi-status
+    taskRef:
+      kind: ClusterTask
+      name: git-clone
+    workspaces:
+    - name: output
+      workspace: workspace-2
+  - name: create-vm
+    params:
+    - name: templateName
+      value: f37-arm
+    - name: templateNamespace
+      value: openshift-cnv
+    - name: templateParams
+      value:
+      - NAME:image-builder-f37
+    - name: startVM
+      value: "true"
+    - name: dataVolumes
+      value: []
+    - name: ownDataVolumes
+      value: []
+    - name: persistentVolumeClaims
+      value: []
+    - name: ownPersistentVolumeClaims
+      value: []
+    runAfter:
+    - check-file
+    taskRef:
+      kind: ClusterTask
+      name: create-vm-from-template-arm
+  - name: execute-in-vm-arm
+    params:
+    - name: vmName
+      value: $(tasks.create-vm.results.name)
+    - name: secretName
+      value: sshkey
+    - name: command
+      value: []
+    - name: args
+      value: []
+    runAfter:
+    - create-vm
+    taskRef:
+      kind: ClusterTask
+      name: execute-in-vm-arm
+  workspaces:
+  - name: workspace-2
